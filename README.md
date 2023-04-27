@@ -11,14 +11,17 @@ SshNet.PuttyKeyFile
 ## Status
 WIP
 
-Currently builds it's own fork of [SSH.NET](https://github.com/sshnet/SSH.NET) to be able to automatically test them.
-
-Needs this Branch: https://github.com/darinkes/SSH.NET-1/tree/agent_auth
+Supports PPK v2 and v3
 
 ## .NET Frameworks
 
 * .NET 4.0
+* .NET 4.6.2
 * netstandard 2.0
+
+#### .NET 4.0 Note ####
+
+PPK v3 encryption is not supported on .NET 4.0
 
 ## Keys
 * ssh-ed25519
