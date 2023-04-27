@@ -11,21 +11,33 @@ using Renci.SshNet.Security.Cryptography.Ciphers;
 using Renci.SshNet.Security.Cryptography.Ciphers.Modes;
 using Renci.SshNet.Security.Cryptography.Ciphers.Paddings;
 using SshNet.PuttyKeyFile.Extensions;
+using System.Linq;
+#if !NET40
+using Konscious.Security.Cryptography; // Putty3
+#endif
 
 namespace SshNet.PuttyKeyFile
 {
-    public class PuttyKeyFile : IPrivateKeyFile
+    public class PuttyKeyFile : IPrivateKeySource
     {
+        // https://tartarus.org/~simon/putty-snapshots/htmldoc/AppendixC.html
+
         private static readonly Regex PuttyPrivateKeyRegex = new(
-            @"^PuTTY-User-Key-File-(?<fileVersion>[0-9]+): *(?<keyType>[^\r\n]+)(\r|\n)+" +
-            @"Encryption: *(?<encryption>[^\r\n]+)(\r|\n)+" +
-            @"Comment: *(?<comment>[^\r\n]+)(\r|\n)+" +
-            @"Public-Lines: *([0-9]+)(\r|\n)+" +
-            @"(?<publicLines>([a-zA-Z0-9/+=]{1,80}(\r|\n)+)+)" +
-            @"Private-Lines: *([0-9]+)(\r|\n)+" +
-            @"(?<privateLines>([a-zA-Z0-9/+=]{1,80}(\r|\n)+)+)" +
-            @"Private-(?<macOrHash>(MAC|Hash)): *(?<hashData>[a-zA-Z0-9/+=]+)",
-            RegexOptions.Compiled | RegexOptions.Multiline);
+                @"^PuTTY-User-Key-File-(?<fileVersion>[0-9]+): *(?<keyType>[^\r\n]+)(\r|\n)+" +
+                @"Encryption: *(?<encryption>[^\r\n]+)(\r|\n)+" +
+                @"Comment: *(?<comment>[^\r\n]+)(\r|\n)+" +
+                @"Public-Lines: *([0-9]+)(\r|\n)+" +
+                @"(?<publicLines>([a-zA-Z0-9/+=]{1,80}(\r|\n)+)+)" +
+                @"(?>Key-Derivation: *(?<keyDerivation>[^\r\n]+)(\r|\n)+)?" + // Putty3
+                @"(?>Argon2-Memory: *(?<argon2Memory>[^\r\n]+)(\r|\n)+)?" + // Putty3
+                @"(?>Argon2-Passes: *(?<argon2Passes>[^\r\n]+)(\r|\n)+)?" + // Putty3
+                @"(?>Argon2-Parallelism: *(?<argon2Parallelism>[^\r\n]+)(\r|\n)+)?" + // Putty3
+                @"(?>Argon2-Salt: *(?<argon2Salt>[^\r\n]+)(\r|\n)+)?" + // Putty3
+                @"Private-Lines: *([0-9]+)(\r|\n)+" +
+                @"(?<privateLines>([a-zA-Z0-9/+=]{1,80}(\r|\n)+)+)" +
+                @"Private-(?<macOrHash>(MAC|Hash)): *(?<hashData>[a-zA-Z0-9/+=]+)",
+                RegexOptions.Compiled | RegexOptions.Multiline);
+
 
         public HostAlgorithm HostKey { get; private set; } = null!;
 
@@ -43,6 +55,12 @@ namespace SshNet.PuttyKeyFile
         public PuttyKeyFile(Stream privateKey, string? passPhrase)
         {
             Open(privateKey, passPhrase);
+        }
+
+        public static bool IsPuttyPrivateKey(string keyText)
+        {
+            var privateKeyMatch = PuttyPrivateKeyRegex.Match(keyText);
+            return privateKeyMatch.Success;
         }
 
         private void Open(Stream privateKey, string? passPhrase)
@@ -65,33 +83,119 @@ namespace SshNet.PuttyKeyFile
             var macOrHash = privateKeyMatch.Result("${macOrHash}");
             var hashData = privateKeyMatch.Result("${hashData}");
 
+#if !NET40
+            var keyDerivation = privateKeyMatch.Result("${keyDerivation}");
+            var argon2Memory = privateKeyMatch.Result("${argon2Memory}");
+            var argon2Passes = privateKeyMatch.Result("${argon2Passes}");
+            var argon2Parallelism = privateKeyMatch.Result("${argon2Parallelism}");
+            var argon2Salt = privateKeyMatch.Result("${argon2Salt}");
+#endif
+
             if (string.IsNullOrEmpty(encryption))
                 throw new SshException("PuTTY private key file encryption was empty");
 
             var publicKeyData = Convert.FromBase64String(publicLines);
 
+            List<byte> macKey3 = new List<byte>();
             byte[] unencryptedPrivateKeyData;
             switch (encryption)
             {
                 case "none":
-                    passPhrase = null;
-                    unencryptedPrivateKeyData = Convert.FromBase64String(privateLines);
-                    break;
+                    {
+                        passPhrase = null;
+                        unencryptedPrivateKeyData = Convert.FromBase64String(privateLines);
+                        break;
+                    }
                 case "aes256-cbc":
-                    if (string.IsNullOrEmpty(passPhrase))
-                        throw new SshPassPhraseNullOrEmptyException("Private key is encrypted but passphrase is empty.");
+                    {
+                        if (string.IsNullOrEmpty(passPhrase))
+                            throw new SshPassPhraseNullOrEmptyException(
+                                "Private key is encrypted but passphrase is empty.");
 
-                    var cipherKey = GetCipherKey(passPhrase, 32);
-                    var cipher = new AesCipher(cipherKey, new CbcCipherMode(new byte[cipherKey.Length]), new PKCS7Padding());
+                        switch (fileVersion)
+                        {
+                            case 2:
+                                {
+                                    var cipherKey = GetCipherKey(passPhrase, 32);
+                                    var cipher = new AesCipher(cipherKey, new CbcCipherMode(new byte[cipherKey.Length]),
+                                        new PKCS7Padding());
 
-                    var privateKeyData = Convert.FromBase64String(privateLines);
-                    if (privateKeyData.Length % cipher.BlockSize != 0)
-                        throw new SshException("Private key data not multiple of cipher block size.");
+                                    var privateKeyData = Convert.FromBase64String(privateLines);
+                                    if (privateKeyData.Length % cipher.BlockSize != 0)
+                                        throw new SshException("Private key data not multiple of cipher block size.");
 
-                    unencryptedPrivateKeyData = cipher.Decrypt(privateKeyData);
-                    break;
+                                    unencryptedPrivateKeyData = cipher.Decrypt(privateKeyData);
+                                    break;
+                                }
+                            case 3:
+                                {
+#if NET40
+                                    throw new SshException($"Encryption {encryption} is not supported on ppk version 3 and .NET 4.0.");
+#else
+									// https://github.com/kmaragon/Konscious.Security.Cryptography
+									Argon2 argon2;
+									var passphraseBytes = Encoding.UTF8.GetBytes(passPhrase);
+									switch (keyDerivation)
+									{
+										case "Argon2d":
+											argon2 = new Argon2d(passphraseBytes);
+											break;
+										case "Argon2i":
+											argon2 = new Argon2i(passphraseBytes);
+											break;
+										case "Argon2id":
+											argon2 = new Argon2id(passphraseBytes);
+											break;
+										default:
+											throw new SshException($"Encryption Key Derivation {keyDerivation} is not supported.");
+									}
+
+									argon2.DegreeOfParallelism = int.Parse(argon2Parallelism);
+									argon2.MemorySize = int.Parse(argon2Memory);
+									argon2.Iterations = int.Parse(argon2Passes);
+									argon2.Salt = StringToByteArray(argon2Salt);
+
+									// Argon2 takes two extra string inputs in addition to the passphrase and the salt: a secret key, and some ‘associated data’. In PPK's use of Argon2, these are both set to the empty string. 
+									//argon2.KnownSecret = new byte[0];
+									//argon2.AssociatedData = new byte[0];
+
+									//So, for ‘aes256-cbc’, the tag length will be 32+16+32 = 80 bytes; of the 80 bytes of output data,
+									// the first 32 bytes are used as the 256-bit AES key,
+									// the next 16 as the CBC IV,
+									// and the final 32 bytes as the HMAC-SHA-256 key. 
+									var cipherKeyComplete = argon2.GetBytes(80);
+
+									var cipherKey = new byte[32];
+									var crcIv = new byte[16];
+									var macKey = new byte[32];
+									Buffer.BlockCopy(cipherKeyComplete, 0, cipherKey, 0, cipherKey.Length);
+									Buffer.BlockCopy(cipherKeyComplete, 32, crcIv, 0, crcIv.Length);
+									Buffer.BlockCopy(cipherKeyComplete, 48, macKey, 0, macKey.Length);
+									macKey3.Clear();
+									macKey3.AddRange(macKey);
+
+									var cipher = new AesCipher(cipherKey, new CbcCipherMode(crcIv), new PKCS7Padding());
+
+									var privateKeyData = Convert.FromBase64String(privateLines);
+									if (privateKeyData.Length % cipher.BlockSize != 0)
+										throw new SshException("Private key data not multiple of cipher block size.");
+
+									unencryptedPrivateKeyData = cipher.Decrypt(privateKeyData);
+									break;
+#endif
+                                }
+                            default:
+                                {
+                                    throw new SshException($"Encryption {encryption} is not supported.");
+                                }
+                        }
+
+                        break;
+                    }
                 default:
-                    throw new SshException($"Encryption {encryption} is not supported.");
+                    {
+                        throw new SshException($"Encryption {encryption} is not supported.");
+                    }
             }
 
             byte[] macData;
@@ -101,16 +205,17 @@ namespace SshNet.PuttyKeyFile
                     macData = unencryptedPrivateKeyData;
                     break;
                 case 2:
-                {
-                    using var data = new SshDataStream(0);
-                    data.Write(keyType, Encoding.UTF8);
-                    data.Write(encryption, Encoding.UTF8);
-                    data.Write(comment, Encoding.UTF8);
-                    data.WriteBinary(publicKeyData);
-                    data.WriteBinary(unencryptedPrivateKeyData);
-                    macData = data.ToArray();
-                    break;
-                }
+                case 3:
+                    {
+                        using var data = new SshDataStream(0);
+                        data.Write(keyType, Encoding.UTF8);
+                        data.Write(encryption, Encoding.UTF8);
+                        data.Write(comment, Encoding.UTF8);
+                        data.WriteBinary(publicKeyData);
+                        data.WriteBinary(unencryptedPrivateKeyData);
+                        macData = data.ToArray();
+                        break;
+                    }
                 default:
                     throw new NotSupportedException($"PuTTY private key file version {fileVersion} is not supported.");
             }
@@ -119,19 +224,35 @@ namespace SshNet.PuttyKeyFile
             switch (macOrHash.ToLower())
             {
                 case "mac":
-                {
-                    using var sha1 = SHA1.Create();
-                    var macKey = sha1.ComputeHash(Encoding.UTF8.GetBytes("putty-private-key-file-mac-key" + passPhrase));
-                    using var hmac = new HMACSHA1(macKey);
-                    macOrHashData = hmac.ComputeHash(macData);
-                    break;
-                }
+                    {
+                        switch (fileVersion)
+                        {
+                            case 2:
+                                {
+                                    using var sha1 = SHA1.Create();
+                                    var macKey = sha1.ComputeHash(Encoding.UTF8.GetBytes("putty-private-key-file-mac-key" + passPhrase));
+                                    using var hmac = new HMACSHA1(macKey);
+                                    macOrHashData = hmac.ComputeHash(macData);
+                                    break;
+                                }
+                            case 3:
+                                {
+                                    using var hmac = new HMACSHA256(macKey3.ToArray());
+                                    macOrHashData = hmac.ComputeHash(macData);
+                                    break;
+                                }
+                            default:
+                                throw new NotSupportedException($"Private key verification algorithm {macOrHash} not supported for file version {fileVersion}");
+                        }
+                        break;
+
+                    }
                 case "hash" when fileVersion == 1:
-                {
-                    using var sha1 = SHA1.Create();
-                    macOrHashData = sha1.ComputeHash(macData);
-                    break;
-                }
+                    {
+                        using var sha1 = SHA1.Create();
+                        macOrHashData = sha1.ComputeHash(macData);
+                        break;
+                    }
                 default:
                     throw new NotSupportedException($"Private key verification algorithm {macOrHash} not supported for file version {fileVersion}");
             }
@@ -178,12 +299,31 @@ namespace SshNet.PuttyKeyFile
                     var inverseQ = privateKeyReader.ReadBigIntWithBytes();
                     parsedKey = new RsaKey(modulus, exponent, d, p, q, inverseQ);
                     break;
+                case "ssh-dss":
+                    var dp = publicKeyReader.ReadBigIntWithBytes();
+                    var dq = publicKeyReader.ReadBigIntWithBytes();
+                    var dg = publicKeyReader.ReadBigIntWithBytes();
+                    var dy = publicKeyReader.ReadBigIntWithBytes();
+                    var dx = privateKeyReader.ReadBigIntWithBytes();
+                    parsedKey = new DsaKey(dp, dq, dg, dy, dx);
+                    break;
                 default:
                     throw new SshException("PuTTY key type '" + keyType + "' is not supported.");
             }
 
             parsedKey.Comment = comment;
             HostKey = new KeyHostAlgorithm(parsedKey.ToString(), parsedKey);
+        }
+
+
+
+
+        private static byte[] StringToByteArray(string hex)
+        {
+            return Enumerable.Range(0, hex.Length)
+                             .Where(x => x % 2 == 0)
+                             .Select(x => Convert.ToByte(hex.Substring(x, 2), 16))
+                             .ToArray();
         }
 
         private static byte[] GetCipherKey(string? passphrase, int length)
@@ -196,7 +336,8 @@ namespace SshNet.PuttyKeyFile
             var passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
 
             var counter = 0;
-            do {
+            do
+            {
                 var counterBytes = BitConverter.GetBytes(counter++);
                 if (BitConverter.IsLittleEndian)
                     Array.Reverse(counterBytes);
@@ -213,6 +354,7 @@ namespace SshNet.PuttyKeyFile
             Buffer.BlockCopy(cipherKey.ToArray(), 0, returnBytes, 0, length);
             return returnBytes;
         }
+
     }
 
     public class SshDataReader : SshData
