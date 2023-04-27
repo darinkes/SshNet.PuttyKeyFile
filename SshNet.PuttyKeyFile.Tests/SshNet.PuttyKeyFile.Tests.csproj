@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net40;net462;net50</TargetFrameworks>
-        <TargetFramework Condition="'$(OS)' != 'Windows_NT'">net50</TargetFramework>
+        <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net40;net462;net70</TargetFrameworks>
+        <TargetFramework Condition="'$(OS)' != 'Windows_NT'">net70</TargetFramework>
         <LangVersion>9</LangVersion>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
