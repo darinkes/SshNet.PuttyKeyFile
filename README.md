@@ -43,3 +43,20 @@ using var client = new SshClient("ssh.foo.com", "root", key);
 client.Connect();
 Console.WriteLine(client.RunCommand("hostname").Result);
 ```
+
+Automatically load the key based on file contents
+
+```cs
+using Renci.SshNet;
+using SshNet.PuttyKeyFile;
+
+var keyText = "<ssh key contents>";
+IPrivateKeySource key = PuttyKeyFile.IsPuttyPrivateKey(keyText) ? new PuttyKeyFile(keyText) : new PrivateKeyFile(keyText);
+// or with passPhrase
+var passPhrase = "<ssh key password/passphrase>";
+IPrivateKeySource key = PuttyKeyFile.IsPuttyPrivateKey(keyText) ? new PuttyKeyFile(keyText, passPhrase) : new PrivateKeyFile(keyText, passPhrase);
+
+using var client = new SshClient("ssh.foo.com", "root", key);
+client.Connect();
+Console.WriteLine(client.RunCommand("hostname").Result);
+```
