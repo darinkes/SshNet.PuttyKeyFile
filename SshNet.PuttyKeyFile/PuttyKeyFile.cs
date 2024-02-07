@@ -86,7 +86,7 @@ namespace SshNet.PuttyKeyFile
                         throw new SshPassPhraseNullOrEmptyException("Private key is encrypted but passphrase is empty.");
 
                     var cipherKey = GetCipherKey(passPhrase, 32);
-                    var cipher = new AesCipher(cipherKey, new CbcCipherMode(new byte[cipherKey.Length]), new PKCS7Padding());
+                    var cipher = new AesCipher(cipherKey, new byte[cipherKey.Length], AesCipherMode.CBC);
 
                     var privateKeyData = Convert.FromBase64String(privateLines);
                     if (privateKeyData.Length % cipher.BlockSize != 0)
@@ -162,7 +162,7 @@ namespace SshNet.PuttyKeyFile
                 case "ssh-ed25519":
                     publicKey = publicKeyReader.ReadBignum2();
                     unencryptedPrivateKey = privateKeyReader.ReadBignum2();
-                    parsedKey = new ED25519Key(publicKey.Reverse(), unencryptedPrivateKey);
+                    parsedKey = new ED25519Key(unencryptedPrivateKey);
                     break;
                 case "ecdsa-sha2-nistp256":
                 case "ecdsa-sha2-nistp384":
