@@ -9,8 +9,6 @@ using Renci.SshNet;
 using Renci.SshNet.Common;
 using Renci.SshNet.Security;
 using Renci.SshNet.Security.Cryptography.Ciphers;
-using Renci.SshNet.Security.Cryptography.Ciphers.Modes;
-using Renci.SshNet.Security.Cryptography.Ciphers.Paddings;
 using SshNet.PuttyKeyFile.Extensions;
 using Konscious.Security.Cryptography;
 using Renci.SshNet.Security.Cryptography;
@@ -36,7 +34,7 @@ namespace SshNet.PuttyKeyFile
             @"(?>Argon2-Salt: *(?<argon2Salt>[^\r\n]+)(\r|\n)+)?" + // Putty3
             @"Private-Lines: *([0-9]+)(\r|\n)+" +
             @"(?<privateLines>([a-zA-Z0-9/+=]{1,80}(\r|\n)+)+)" +
-            @"Private-(?<macOrHash>(MAC|Hash)): *(?<hashData>[a-zA-Z0-9/+=]+)",
+            "Private-(?<macOrHash>(MAC|Hash)): *(?<hashData>[a-zA-Z0-9/+=]+)",
             RegexOptions.Compiled | RegexOptions.Multiline);
 
         private readonly List<HostAlgorithm> _hostAlgorithms = new();
@@ -131,20 +129,13 @@ namespace SshNet.PuttyKeyFile
                         {
                             Argon2 argon2;
                             var passphraseBytes = Encoding.UTF8.GetBytes(passPhrase);
-                            switch (keyDerivation)
+                            argon2 = keyDerivation switch
                             {
-                                case "Argon2d":
-                                    argon2 = new Argon2d(passphraseBytes);
-                                    break;
-                                case "Argon2i":
-                                    argon2 = new Argon2i(passphraseBytes);
-                                    break;
-                                case "Argon2id":
-                                    argon2 = new Argon2id(passphraseBytes);
-                                    break;
-                                default:
-                                    throw new SshException($"Encryption Key Derivation {keyDerivation} is not supported.");
-                            }
+                                "Argon2d" => new Argon2d(passphraseBytes),
+                                "Argon2i" => new Argon2i(passphraseBytes),
+                                "Argon2id" => new Argon2id(passphraseBytes),
+                                _ => throw new SshException($"Encryption Key Derivation {keyDerivation} is not supported.")
+                            };
 
                             argon2.DegreeOfParallelism = int.Parse(argon2Parallelism);
                             argon2.MemorySize = int.Parse(argon2Memory);
