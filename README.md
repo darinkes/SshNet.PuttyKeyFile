@@ -10,9 +10,6 @@ SshNet.PuttyKeyFile
 ![.NET-Windows](https://github.com/darinkes/SshNet.PuttyKeyFile/workflows/.NET-Windows/badge.svg)
 ![NuGet](https://github.com/darinkes/SshNet.PuttyKeyFile/workflows/NuGet/badge.svg)
 
-## Status
-WIP
-
 ## .NET Frameworks
 
 * .NET 4.8
